@@ -1,17 +1,9 @@
 # -*- coding: utf-8 -*-
-"""
-Original file is located at
-    https://colab.research.google.com/drive/1E-O7ASKCG-N9FKgFhfQyekxOn-n-FACD
-"""
-
-"""# Imports"""
-
+import argparse
 import numpy as np
 
-from PIL import Image
-from pathlib import Path
-
-# Keras libraries and packages
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 from keras.callbacks import ModelCheckpoint
 from keras.layers import Convolution2D
 from keras.layers import Dense
@@ -21,113 +13,140 @@ from keras.layers import MaxPooling2D
 from keras.models import Sequential
 from keras.preprocessing import image
 from keras.preprocessing.image import ImageDataGenerator
+from pathlib import Path
+from PIL import Image
 
-# * Intialize CNN
-print('Intialize CNN')
-classifier = Sequential()
+app = Flask(__name__)
+CORS(app)
 
-# * 1. Convolution
-print('Adding convolution layer')
-classifier.add(Convolution2D(32, 4, strides=1, input_shape=(64, 64, 3), activation='relu'))
+def train(dataset_dir, model_path):
+	# * Intialize CNN
+	print('Intialize CNN')
+	classifier = Sequential()
 
-# * 2. Pooling
-print('Adding pooling layer')
-classifier.add(MaxPooling2D(pool_size=(2, 2), strides=2))
-classifier.add(Dropout(0.25))
+	# Convolution
+	print('Adding convolution layer')
+	classifier.add(Convolution2D(32, 4, strides=1, input_shape=(64, 64, 3), activation='relu'))
 
-# * 3. Convolution
-print('Adding convolution layer')
-classifier.add(Convolution2D(64, 3, strides=1, activation='relu'))
+	# Pooling
+	print('Adding pooling layer')
+	classifier.add(MaxPooling2D(pool_size=(2, 2), strides=2))
+	classifier.add(Dropout(0.25))
 
-# * 4. Pooling
-print('Adding pooling layer')
-classifier.add(MaxPooling2D(pool_size=(2, 2), strides=2))
-classifier.add(Dropout(0.25))
+	# Convolution
+	print('Adding convolution layer')
+	classifier.add(Convolution2D(64, 3, strides=1, activation='relu'))
 
-# * 5. Flattening
-print('Adding flattening layer')
-classifier.add(Flatten())
+	# Pooling
+	print('Adding pooling layer')
+	classifier.add(MaxPooling2D(pool_size=(2, 2), strides=2))
+	classifier.add(Dropout(0.25))
 
-# * 6. Full connection
-print('Adding fully connected layer')
-classifier.add(Dense(units=128, activation='relu'))
-classifier.add(Dropout(0.5))
-classifier.add(Dense(units=1, activation='sigmoid'))
+	# Flattening
+	print('Adding flattening layer')
+	classifier.add(Flatten())
 
-# * Compile the CNN
-print('Compiling the network')
-classifier.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+	# Full connection
+	print('Adding fully connected layer')
+	classifier.add(Dense(units=128, activation='relu'))
+	classifier.add(Dropout(0.5))
+	classifier.add(Dense(units=2, activation='softmax'))
 
-# * Generate more data by transforming existing images
-print('Generating dataset')
-train_datagen = ImageDataGenerator(
-        rescale=1./255,
-        shear_range=0.2,
-        zoom_range=0.2,
-        horizontal_flip=True)
+	# Compile the CNN
+	print('Compiling the network')
+	classifier.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
 
-validation_datagen = ImageDataGenerator(rescale=1./255)
+	# Generate data by transforming existing images
+	print('Generating dataset')
+	train_datagen = ImageDataGenerator(
+			rotation_range=15,
+			rescale=1./255,
+			shear_range=0.2,
+			zoom_range=0.2,
+			horizontal_flip=True)
 
-parent_dir = '/content/drive/My Drive/Colab Notebooks/Signature Verification/'
-training_set_path = parent_dir + 'dataset/training_set'
-validation_set_path = parent_dir + 'dataset/val_set'
+	validation_datagen = ImageDataGenerator(rescale=1./255)
 
-training_set = train_datagen.flow_from_directory(
-        training_set_path,
-        target_size=(64, 64),
-        batch_size=32,
-        class_mode='binary')
-    
-validation_set = validation_datagen.flow_from_directory(
-        validation_set_path,
-        target_size=(64, 64),
-        batch_size=32,
-        class_mode='binary')
+	training_set_path = Path(dataset_dir).absolute() / 'training_set'
+	validation_set_path = Path(dataset_dir).absolute() / 'val_set'
 
-# * Save best weights while training
-checkpoint = ModelCheckpoint(
-        parent_dir + 'model/model.best.h5',
-        monitor='val_acc',
-        verbose=1,
-        save_best_only=True)
-callbacks_list = [checkpoint]
+	training_set = train_datagen.flow_from_directory(
+			str(training_set_path),
+			target_size=(64, 64),
+			batch_size=32,
+			class_mode='categorical')
+		
+	validation_set = validation_datagen.flow_from_directory(
+			str(validation_set_path),
+			target_size=(64, 64),
+			batch_size=32,
+			class_mode='categorical')
 
-# * Training the network
-print('Training the network')
-classifier.fit_generator(
-        training_set,
-        steps_per_epoch=500,
-        epochs=15,
-        validation_data=validation_set,
-        validation_steps=300,
-        callbacks=callbacks_list,
-        shuffle=True)
+	# Save best weights while training
+	checkpoint = ModelCheckpoint(
+			str(Path(model_path).absolute() / 'model.best.h5'),
+			monitor='val_acc',
+			verbose=1,
+			save_best_only=True)
+	callbacks_list = [checkpoint]
 
-# * Save model
-print('Saving model')
-classifier_json = classifier.to_json()
-with open(parent_dir + 'model/model.json', 'w') as f:
-    f.write(classifier_json)
-classifier.save_weights(parent_dir + 'model/model.weights.h5')
+	# Training the network
+	print('Training the network')
+	classifier.fit_generator(
+			training_set,
+			steps_per_epoch=500,
+			epochs=15,
+			validation_data=validation_set,
+			validation_steps=300,
+			callbacks=callbacks_list,
+			shuffle=True)
 
-# * Test the network
-print('Predicting')
-# test_image_path = parent_dir + 'dataset/test_set/forge/00301002.png' # Forged
-# test_image_path = parent_dir + 'dataset/test_set/real/04601046.png' # Real
-test_image_path = parent_dir + 'dataset/IMG_7989.jpg'
+def predict(test_image_path, load_model_path):
+	print(f'Predicting image `{test_image_path}`')
+	test_image = image.load_img(test_image_path, target_size=(64, 64))
+	test_image = image.img_to_array(test_image)
+	test_image = np.expand_dims(test_image, axis=0)
 
-test_image = image.load_img(test_image_path, target_size=(64, 64))
-test_image = image.img_to_array(test_image)
-test_image = np.expand_dims(test_image, axis=0)
+	print('Loading model')
+	classifier = Sequential()
+	classifier.load_weights(load_model_path)
 
-result = classifier.predict(test_image)
+	result = classifier.predict(test_image)
 
-if result[0][0] >= 0.5:
-    predicted = 'Real'
-else:
-    predicted = 'Forged'
+	if int(np.argmax(result[0])) == 1:
+		print('Genuine Signature')
+	else:
+		print('Forged Signature')
 
-# * Load model
-print('Loading model')
-model_path = parent_dir + 'model/model.best.h5'
-classifier.load_weights(model_path)
+def execute(training_dir=None, save_model_path=None, test_image_path=None, load_model_path=None):
+	if training_dir is not None:
+		if save_model_path is None:
+			print('Provide a directory to save model.')
+			return
+		
+		train(training_dir, save_model_path)
+		return
+	
+	if test_image_path is not None:
+		if load_model_path is None:
+			print('Provide path to model to predict with.')
+			return
+
+		predict(test_image_path)
+		return
+
+if __name__ == '__main__':
+	parser = argparse.ArgumentParser()
+	parser.add_argument('-d', '--dir', type=str, help='Directory in which the dataset lies.', default=None)
+	parser.add_argument('-s', '--save', type=str, help='Directory in which model will be saved.', default=None)
+	parser.add_argument('-t', '--test', type=str, help='Path of the image to test on.', default=None)
+	parser.add_argument('-l', '--load', type=str, help='Path of the model to load.', default=None)
+
+	args = parser.parse_args()
+
+	training_dir = args.dir
+	save_model_path = args.save
+	test_image_path = args.test
+	load_model_path = args.load
+
+	execute(training_dir, save_model_path, test_image_path, load_model_path)
